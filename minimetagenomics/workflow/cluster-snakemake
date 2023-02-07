@@ -1,0 +1,7 @@
+#!/bin/bash
+
+snakemake \
+	--cluster-config ./cluster_config.json --jobs 50 \
+	--cluster 'sbatch -p {cluster.partition} -N {cluster.nodes} -c {cluster.cores} -t {cluster.time} --mem {cluster.memory} $(./parse_dependency.py {dependencies}) -o {cluster.out} -e {cluster.err}' \
+	--notemp --immediate-submit --latency-wait 60 \
+	$@

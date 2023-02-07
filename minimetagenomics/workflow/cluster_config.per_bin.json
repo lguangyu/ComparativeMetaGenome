@@ -1,0 +1,29 @@
+{
+	"__default__": {
+		"account": "li.gua",
+		"partition": "short",
+		"nodes": 1,
+		"cores": 1,
+		"memory": "2GB",
+		"time": "4:00:00",
+		"out": "/dev/null",
+		"err": "/dev/null"
+	},
+	"bowtie2_build": {
+		"cores": 4,
+		"memory": "2GB"
+	},
+	"bowtie2": {
+		"cores": 4,
+		"memory": "2GB",
+		"out": ".log/bowtie2.log",
+		"err": ".log/bowtie2.err"
+	},
+	"spades": {
+		"cores": 6,
+		"memory": "32GB",
+		"time": "1-00:00:00",
+		"out": ".log/spades.log",
+		"err": ".log/spades.err"
+	}
+}

@@ -1,0 +1,127 @@
+{
+	"__default__": {
+		"account": "li.gua",
+		"partition": "short",
+		"nodes": 1,
+		"cores": 1,
+		"memory": "2GB",
+		"time": "4:00:00",
+		"out": "/dev/null",
+		"err": "/dev/null"
+	},
+	"trimmomatic": {
+		"cores": 4,
+		"memory": "32GB",
+		"out": ".log/trimmomatic.log",
+		"err": ".log/trimmomatic.err"
+	},
+	"kaiju": {
+		"cores": 8,
+		"memory": "64GB",
+		"out": ".log/kaiju.log",
+		"err": ".log/kaiju.err"
+	},
+	"kaiju_removed_human": {
+		"cores": 8,
+		"memory": "64GB",
+		"out": ".log/kaiju.log",
+		"err": ".log/kaiju.err"
+	},
+	"remove_human_reads": {
+		"cores": 8,
+		"memory": "8GB",
+		"out": ".log/remove_human_reads.log",
+		"err": ".log/remove_human_reads.err"
+	},
+	"dnaclust": {
+		"cores": 12,
+		"memory": "64GB",
+		"time": "1-00:00:00",
+		"out": ".log/dnaclust.log",
+		"err": ".log/dnaclust.err"
+	},
+	"treq": {
+		"cores": 12,
+		"memory": "32GB",
+		"time": "12:00:00",
+		"out": ".log/treq.log",
+		"err": ".log/treq.err"
+	},
+	"cdhit": {
+		"cores": 16,
+		"memory": "32GB",
+		"time": "1-00:00:00",
+		"out": ".log/cdhit.log",
+		"err": ".log/cdhit.err"
+	},
+	"spades_nc": {
+		"cores": 6,
+		"memory": "48GB",
+		"time": "1-00:00:00",
+		"out": ".log/spades_nc.log",
+		"err": ".log/spades_nc.err"
+	},
+	"spades_nc_removed_human": {
+		"cores": 6,
+		"memory": "32GB",
+		"time": "1-00:00:00",
+		"out": ".log/spades_nc.log",
+		"err": ".log/spades_nc.err"
+	},
+	"spades_dnaclust": {
+		"cores": 8,
+		"memory": "32GB",
+		"time": "1-00:00:00",
+		"out": ".log/spades_dnaclust.log",
+		"err": ".log/spades_dnaclust.err"
+	},
+	"spades_treq": {
+		"cores": 8,
+		"memory": "32GB",
+		"time": "1-00:00:00",
+		"out": ".log/spades_treq.log",
+		"err": ".log/spades_treq.err"
+	},
+	"bowtie2_build": {
+		"cores": 4,
+		"memory": "2GB"
+	},
+	"bowtie2": {
+		"cores": 4,
+		"memory": "2GB",
+		"out": ".log/bowtie2.log",
+		"err": ".log/bowtie2.err"
+	},
+	"sort_mapped_reads": {
+		"cores": 12,
+		"memory": "16GB"
+	},
+	"remove_duplicate_reads": {
+		"cores": 1,
+		"memory": "32GB"
+	},
+	"index_mapped_reads": {
+		"cores": 4
+	},
+	"vsearch_usearch_global": {
+		"cores": 16,
+		"memory": "256GB",
+		"time": "24:00:00",
+		"out": ".log/vsearch_usearch_global.log",
+		"err": ".log/vsearch_usearch_global.err"
+	},
+	"diamond_blastp": {
+		"cores": 16,
+		"memory": "64GB",
+		"time": "24:00:00",
+		"out": ".log/diamond_blastp.log",
+		"err": ".log/diamond_blastp.err"
+	},
+	"contig_annotation": {
+		"memory": "8GB"
+	},
+	"rrna_16s_extract_reads": {
+		"cores": 8,
+		"memory": "2GB"
+	}
+}

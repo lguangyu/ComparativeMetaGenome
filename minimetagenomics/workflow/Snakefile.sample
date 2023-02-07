@@ -1,0 +1,710 @@
+################################################################################
+# GLOBAL CONFIGS
+################################################################################
+
+#shell.prefix("source ~/.bashrc")
+spades_assembly	= "spades_nc"
+spades_contig	= spades_assembly + "/contigs.fasta"
+spades_scaffold	= spades_assembly + "/scaffolds.fasta"
+samtools		= "/home/li.gua/opt/htslib/1.12-2021-03-17/bin/samtools"
+
+
+################################################################################
+# RULES
+################################################################################
+rule test:
+	#input:
+	#	"test.input",
+	output:
+		"test.output",
+	shell:
+		"""
+		"""
+		#bash -c "
+		#	. /home/li.gua/.bashrc
+		#	conda activate metagenomics \\
+		#		&& touch test.output
+		#"
+
+################################################################################
+# reads trim and qc
+################################################################################
+# trimmomatic parameters are consistent with original pipeline by Yu et al. 2017
+rule trimmomatic:
+	input:
+		"fastq/R1.fastq",
+		"fastq/R2.fastq",
+	output:
+		"trimmomatic/R1.fastq",
+		"trimmomatic/R1.unpaired.fastq",
+		"trimmomatic/R2.fastq",
+		"trimmomatic/R2.unpaired.fastq",
+	params:
+		java="/home/li.gua/opt/java/jre1.8.0_281/bin/java",
+		trimmomatic="/home/li.gua/Jar/Trimmomatic-0.39/trimmomatic-0.39.jar",
+	shell:
+		"""
+		mkdir -p trimmomatic
+		{params.java} -jar {params.trimmomatic} \\
+			PE {input} {output} \\
+			-threads $SLURM_CPUS_PER_TASK \\
+			ILLUMINACLIP:TruSeq3-PE.fa:2:30:10:2:keepBothReads LEADING:3 TRAILING:3 MINLEN:36
+		"""
+
+################################################################################
+# kaiju reads classification
+################################################################################
+rule kaiju:
+	input:
+		r1="trimmomatic/R1.fastq",
+		r2="trimmomatic/R2.fastq",
+	output:
+		"kaiju/kaiju.output",
+	params:
+		kaiju="/home/li.gua/opt/kaiju/1.7.4-2020-11-04/kaiju",
+		nodes_dmp="/home/li.gua/scratch/DATABASE/KAIJU_DB/nodes.dmp",
+		db_fmi="/home/li.gua/scratch/DATABASE/KAIJU_DB/kaiju_db.fmi",
+	shell:
+		"""
+		mkdir -p $(dirname {output})
+		{params.kaiju} \\
+			-t {params.nodes_dmp} -f {params.db_fmi} -z $SLURM_CPUS_PER_TASK \\
+			-i {input.r1} -j {input.r2} -o {output}
+		"""
+
+rule kaiju_removed_human:
+	input:
+		r1="remove_human_reads/unmapped_R1.fastq",
+		r2="remove_human_reads/unmapped_R2.fastq",
+	output:
+		"kaiju_removed_human/kaiju.output",
+	params:
+		kaiju="/home/li.gua/opt/kaiju/1.7.4-2020-11-04/kaiju",
+		nodes_dmp="/home/li.gua/scratch/DATABASE/KAIJU_DB/nodes.dmp",
+		db_fmi="/home/li.gua/scratch/DATABASE/KAIJU_DB/kaiju_db.fmi",
+	shell:
+		"""
+		mkdir -p $(dirname {output})
+		{params.kaiju} \\
+			-t {params.nodes_dmp} -f {params.db_fmi} -z $SLURM_CPUS_PER_TASK \\
+			-i {input.r1} -j {input.r2} -o {output}
+		"""
+
+rule kaiju2table:
+	input:
+		"kaiju/kaiju.output",
+	output:
+		"kaiju/kaiju.output.genus.table",
+		"kaiju/kaiju.output.family.table",
+		"kaiju/kaiju.output.order.table",
+		"kaiju/kaiju.output.class.table",
+		"kaiju/kaiju.output.phylum.table",
+	params:
+		kaiju2table="/home/li.gua/opt/kaiju/1.7.4-2020-11-04/kaiju2table",
+		nodes_dmp="/home/li.gua/scratch/DATABASE/KAIJU_DB/nodes.dmp",
+		names_dmp="/home/li.gua/scratch/DATABASE/KAIJU_DB/names.dmp",
+	shell:
+		"""
+		for i in {{phylum,class,order,family,genus}}; do
+			{params.kaiju2table} \\
+				-t {params.nodes_dmp} -n {params.names_dmp} -r $i \\
+				-o {input}.$i.table {input}
+		done
+		"""
+
+################################################################################
+# !EXPERIMENTAL! remove human gene reads
+################################################################################
+rule remove_human_reads:
+	input:
+		r1="trimmomatic/R1.fastq",
+		r2="trimmomatic/R2.fastq",
+	output:
+		r1="remove_human_reads/unmapped_R1.fastq",
+		r2="remove_human_reads/unmapped_R2.fastq",
+	params:
+		bowtie2="/home/li.gua/opt/bowtie/2-2.4.2-2020-10-05/bowtie2",
+		bt2_idx="/home/li.gua/scratch/DATABASE/BOWTIE2_DB/GRCh38_noalt_as/GRCh38_noalt_as",
+		sam="remove_human_reads/mapped.sam", # this is non-essential output
+	shell:
+		"""
+		mkdir -p remove_human_reads
+		{params.bowtie2} \\
+			-p $SLURM_CPUS_PER_TASK -x {params.bt2_idx} --end-to-end \\
+			-1 {input.r1} -2 {input.r2} --un-conc remove_human_reads/unmapped \\
+			-S {params.sam}
+		mv remove_human_reads/unmapped.1 {output.r1}
+		mv remove_human_reads/unmapped.2 {output.r2}
+		"""
+
+################################################################################
+# pre-assembly
+################################################################################
+# this step might be needed by some clusters/assemblers
+rule merge_reads_fasta:
+	input:
+		"trimmomatic/R1.fastq",
+		"trimmomatic/R2.fastq"
+	output:
+		"merge_reads/R12.fasta"
+	shell:
+		"""
+		mkdir -p merge_reads
+		/home/li.gua/opt/idba/1.1.3-2016-06-11/bin/fq2fa \\
+			--merge {input} /dev/stdout \\
+		| tr ' ' ':' > {output}
+		"""
+
+################################################################################
+# cluster reads and extract the representative of each cluster
+################################################################################
+# dnaclust is used originally by Yu et al. 2017
+rule dnaclust:
+	input:
+		"merge_reads/R12.fasta"
+	output:
+		"dnaclust/R12.cluster.fasta"
+	shell:
+		"""
+		/home/li.gua/opt/dnaclust/rel3-2013-08-12/dnaclust \\
+			-t $SLURM_CPUS_PER_TASK -k 5 -s 0.98 {input} > {output}
+		"""
+
+# treq-cg as an alternative as it can have output similar to paired-end reads
+# probably is the only reads clustering software so far having this feature
+rule treq:
+	input:
+		"trimmomatic/R1.fastq",
+		"trimmomatic/R2.fastq"
+	output:
+		"treq/split_1.fastq",
+		"treq/split_2.fastq"
+	shell:
+		"""
+		mkdir -p treq
+		/home/li.gua/opt/treq-cg/0.3-2014-04-18/bin/treq-cluster \\
+			-t $SLURM_CPUS_PER_TASK -k 5 -s 0.98 treq/cluster {input}
+		/home/li.gua/opt/treq-cg/0.3-2014-04-18/bin/treq-split \\
+			treq/cluster treq/split {input}
+		rm -f treq/cluster.*
+		"""
+
+# cd-hit is MUCH faster than dnaclust which runs forever; try it out as well
+rule cdhit:
+	input:
+		"merge_reads/R12.fasta"
+	output:
+		"cdhit/R12.cluster.fasta"
+	shell:
+		""" 
+		mkdir -p cdhit
+		/home/li.gua/opt/cd-hit/4.8.1-2019-02-28/cd-hit \\
+			-i {input} -o {output} -c 0.98 \\
+			-M 0 -T $SLURM_CPUS_PER_TASK -n 5
+		"""
+
+################################################################################
+# assembly based on different reads clustering outputs
+################################################################################
+# spades.py --sc --careful lines up with the original pipeline by Yu et al. 2017
+# this rule construct contigs without reads clustering
+rule spades_nc_removed_human:
+	input:
+		r1="remove_human_reads/unmapped_R1.fastq",
+		r2="remove_human_reads/unmapped_R2.fastq",
+	output:
+		contig="spades_nc_removed_human/contigs.fasta",
+		scaffold="spades_nc_removed_human/scaffolds.fasta",
+	shell:
+		"""
+		bash -c "
+			. /home/li.gua/.bashrc
+			conda activate metagenomics
+			spades.py --sc --careful -t $SLURM_CPUS_PER_TASK \\
+				-m 256 -k 33,55,77,99 \\
+				-o $(dirname {output.contig}) -1 {input.r1} -2 {input.r2}
+		"
+		"""
+
+rule spades_nc:
+	input:
+		r1="trimmomatic/R1.fastq",
+		r2="trimmomatic/R2.fastq",
+	output:
+		contig="spades_nc/contigs.fasta",
+		scaffold="spades_nc/scaffolds.fasta",
+	shell:
+		"""
+		bash -c "
+			. /home/li.gua/.bashrc
+			conda activate metagenomics
+			spades.py --sc --careful -t $SLURM_CPUS_PER_TASK \\
+				-m 256 -k 33,55,77,99 \\
+				-o $(dirname {output.contig}) -1 {input.r1} -2 {input.r2}
+		"
+		"""
+
+rule spades_dnaclust:
+	input:
+		"dnaclust/R12.cluster.fasta"
+	output:
+		contig="spades_dnaclust/contigs.fasta",
+		scaffold="spades_dnaclust/scaffolds.fasta",
+	shell:
+		"""
+		bash -c "
+			. /home/li.gua/.bashrc
+			conda activate metagenomics
+			spades.py --sc --careful -t $SLURM_CPUS_PER_TASK \\
+				-m 64 -k 33,55,77,99 \\
+				-o $(dirname {output.contig}) -s {input}
+		"
+		"""
+
+rule spades_treq:
+	input:
+		r1="treq/split_1.fastq",
+		r2="treq/split_2.fastq",
+	output:
+		contig="spades_treq/contigs.fasta",
+		scaffold="spades_treq/scaffolds.fasta",
+	shell:
+		"""
+		bash -c "
+			. /home/li.gua/.bashrc
+			conda activate metagenomics
+			spades.py --sc --careful -t $SLURM_CPUS_PER_TASK \\
+				-m 64 -k 33,55,77,99 \\
+				-o $(dirname {output.contig}) -1 {input.r1} -2 {input.r2}
+		"
+		"""
+
+################################################################################
+# contig sequence name simplification, filtering and unifying
+################################################################################
+rule finalize_contig:
+	input:
+		spades_contig
+	output:
+		"assembly_finalized/contig.fasta",
+	shell:
+		"""
+		mkdir -p $(dirname {output})
+		bash -c "
+			. /home/li.gua/.bashrc
+			conda activate anvio-7
+			anvi-script-reformat-fasta \\
+				-l 2500 --simplify-names \\
+				-o {output} \\
+				-r {output}.report.txt \\
+				{input}
+		"
+		"""
+
+rule finalize_scaffold:
+	input:
+		spades_scaffold
+	output:
+		"assembly_finalized/scaffold.fasta"
+	shell:
+		"""
+		mkdir -p $(dirname {output})
+		bash -c "
+			. /home/li.gua/.bashrc
+			conda activate anvio-7
+			anvi-script-reformat-fasta \\
+				-l 2500 --simplify-names \\
+				-o {output} \\
+				-r {output}.report.txt \\
+				{input}
+		"
+		"""
+
+################################################################################
+# map reads back to contigs
+################################################################################
+rule bowtie2_build:
+	input:
+		"assembly_finalized/contig.fasta",
+	output:
+		"bt2_idx/end",
+	params:
+		bt2_build="/home/li.gua/opt/bowtie/2-2.4.2-2020-10-05/bowtie2-build",
+	shell:
+		"""
+		mkdir -p $(dirname {output})
+		{params.bt2_build} -f --threads $SLURM_CPUS_PER_TASK \\
+			{input} $(dirname {output})/ref
+		touch {output}
+		"""
+
+rule bowtie2:
+	input:
+		idx="bt2_idx/end",
+		r1="trimmomatic/R1.fastq",
+		r2="trimmomatic/R2.fastq",
+	output:
+		"mapping/reads_to_contig.sam",
+	params:
+		bowtie2="/home/li.gua/opt/bowtie/2-2.4.2-2020-10-05/bowtie2",
+	shell:
+		"""
+		mkdir -p $(dirname {output})
+		{params.bowtie2} -q -p $SLURM_CPUS_PER_TASK \\
+			-x $(dirname {input.idx})/ref --very-sensitive-local -I 0 -X 1000 \\
+			-1 {input.r1} -2 {input.r2} -S {output}
+		"""
+
+rule filter_mapped_reads:
+	input:
+		"mapping/reads_to_contig.sam",
+	output:
+		"mapping/reads_to_contig.sam.mapped.bam",
+	params:
+		samtools = samtools,
+	shell:
+		"""
+		{params.samtools} view -b -F 0x4 {input} > {output}
+		"""
+
+rule sort_mapped_reads:
+	input:
+		"mapping/reads_to_contig.sam.mapped.bam",
+	output:
+		"mapping/reads_to_contig.sam.mapped.bam.sorted.bam",
+	params:
+		samtools = samtools,
+	shell:
+		"""
+		{params.samtools} sort -@ $SLURM_CPUS_PER_TASK {input} > {output}
+		"""
+
+rule remove_duplicate_reads:
+	input:
+		"mapping/reads_to_contig.sam.mapped.bam.sorted.bam",
+	output:
+		bam="mapping/reads_to_contig.sam.mapped.bam.sorted.bam.rmdup.bam",
+		metric="mapping/reads_to_contig.sam.mapped.bam.sorted.bam.rmdup.metric.txt",
+	params:
+		picard="/home/li.gua/Jar/picard.jar",
+	shell:
+		"""
+		module load oracle_java/jdk1.8.0_181
+		java -jar {params.picard} MarkDuplicates \\
+			I={input} O={output.bam} M={output.metric} \\
+			REMOVE_DUPLICATES=true MAX_FILE_HANDLES=1000
+		"""
+
+rule index_mapped_reads:
+	input:
+		"mapping/reads_to_contig.sam.mapped.bam.sorted.bam.rmdup.bam",
+	output:
+		"mapping/reads_to_contig.sam.mapped.bam.sorted.bam.rmdup.bam.bai",
+	params:
+		samtools = samtools,
+	shell:
+		"""
+		{params.samtools} index -b -@ $SLURM_CPUS_PER_TASK {input} > {output}
+		"""
+
+rule contig_map_count:
+	input:
+		"mapping/reads_to_contig.sam.mapped.bam.sorted.bam.rmdup.bam",
+	output:
+		"mapping/reads_to_contig.sam.mapped.bam.sorted.bam.rmdup.bam.contig_map_count.txt",
+	params:
+		samtools = samtools,
+	shell:
+		"""
+		{params.samtools} view {input} | cut -f 3 | uniq -c \\
+			| sed -r 's/\\s+([0-9]+)\\s+(.*)$/\\2    \\1/' > {output}
+		"""
+
+################################################################################
+# gene calling
+################################################################################
+# here we use 4 sets of software to do the gene calling, per description in the
+# DOE-JGI metagenome annotation pipeline (MAP) v.4
+# doi: 10.1186/s40793-016-0138-x
+################################################################################
+rule rnammer:
+	input: 
+		"assembly_finalized/contig.fasta",
+	output:
+		gff="gene_calling/rnammer.gff",
+		xml="gene_calling/rnammer.xml",
+		fna="gene_calling/rnammer.fna",
+		hmmreport="gene_calling/rnammer.hmmreport",
+	params:
+		rnammer="/home/li.gua/opt/rnammer/1.2/rnammer",
+	shell:
+		""" 
+		mkdir -p $(dirname {output.gff})
+		{params.rnammer} -S bac -m lsu,ssu,tsu \\
+			-xml {output.xml} -gff {output.gff} \\
+			-f {output.fna} -h {output.hmmreport} \\
+			< {input}
+		"""
+
+rule metagenemark:
+	input:
+		"assembly_finalized/contig.fasta",
+	output:
+		gff="gene_calling/metagenemark.gff",
+		cds_aa="gene_calling/metagenemark.faa",
+		cds_nt="gene_calling/metagenemark.fna",
+	params:
+		gmhmmp="/home/li.gua/opt/genemark/metagenemark-3.38-2017-04-11/gmhmmp",
+		model="/home/li.gua/opt/genemark/metagenemark-3.38-2017-04-11/MetaGeneMark_v1.mod",
+	shell:
+		""" 
+		mkdir -p $(dirname {output.gff})
+		# options: disallow overlapping genes (-p 0)
+		{params.gmhmmp} -m {params.model} \\
+			-p 0 -f G -o {output.gff} -A {output.cds_aa} -D {output.cds_nt} \\
+			{input}
+		"""
+
+rule prodigal:
+	input:
+		"assembly_finalized/contig.fasta",
+	output:
+		gff="gene_calling/prodigal.gff",
+		cds_aa="gene_calling/prodigal.faa",
+		cds_nt="gene_calling/prodigal.fna",
+	params:
+		prodigal="/home/li.gua/opt/prodigal/2.6.3-2016-02-11/prodigal",
+	shell:
+		""" 
+		mkdir -p $(dirname {output.gff})
+		{params.prodigal} \\
+			-p meta -f gff -i {input} \\
+			-o {output.gff} -a {output.cds_aa} -d {output.cds_nt}
+		"""
+
+rule metageneannotator:
+	input:
+		"assembly_finalized/contig.fasta",
+	output:
+		gff="gene_calling/metageneannotator.gff",
+		out="gene_calling/metageneannotator.out",
+	params:
+		mga="/home/li.gua/opt/metageneannotator/2008-08-19/mga",
+	shell:
+		""" 
+		mkdir -p $(dirname {output.gff})
+		{params.mga} \\
+			{input} -m > {output.out}
+		./script/metageneannotator_to_gff.py \\
+			{output.out} > {output.gff}
+		"""
+
+rule fraggenescan:
+	input:
+		"assembly_finalized/contig.fasta",
+	output:
+		gff="gene_calling/fraggenescan.gff",
+		cds_aa="gene_calling/fraggenescan.faa",
+		cds_nt="gene_calling/fraggenescan.fna",
+	params:
+		fgs="/home/li.gua/opt/fraggenescan/1.3.0-5db236d-2017-05-08/run_FragGeneScan.pl",
+	shell:
+		""" 
+		mkdir -p $(dirname {output.gff})
+		{params.fgs} \\
+			-genome {input} -out gene_calling/fraggenescan -complete 0 \\
+			-train complete -thread 1
+		mv gene_calling/fraggenescan.ffn {output.cds_nt}
+		"""
+
+rule resolve_gene_calling_gff:
+	input:
+		"gene_calling/metagenemark.gff",
+		"gene_calling/prodigal.gff",
+		#"gene_calling/metageneannotator.gff",
+		#"gene_calling/fraggenescan.gff",
+	output:
+		"gene_calling/resolved.gff"
+	shell:
+		"""
+		./script/resolve_multiple_gff_cds.py -l 300 {input} > {output}
+		"""
+
+rule extract_resolved_gene_cds:
+	input:
+		contig="assembly_finalized/contig.fasta",
+		gff="gene_calling/resolved.gff",
+	output:
+		fna="gene_calling/resolved.fna",
+		faa="gene_calling/resolved.faa",
+	shell:
+		"""
+		bash -c "
+			. /home/li.gua/.bashrc
+			conda activate metagenomics
+			./script/gff_to_cds_fasta.py -g {input.gff} -f {input.contig} \\
+				-n {output.fna} -a {output.faa}.tmp
+			./script/fix_prodigal_tga_translate.py \\
+				-o {output.faa} {output.faa}.tmp
+			rm -f {output.faa}.tmp
+		"
+		"""
+
+################################################################################
+# phylogetic lineage annotation
+################################################################################
+# this annotation performed in two steps:
+#   1. blast against ncbi's refseq protein database using diamond
+#   2. assign lineage to each contig based on gene assignments and LCA
+################################################################################
+# first align cds to database
+# in this section, the parameters are:
+# 1. aligners to use (diamond, blastp, usearch/vsearch, etc.)
+# 2. databse (ncbi nt, nr, refseq_protein, swissprot, etc.)
+# note that some programs may specifically want nucleotide/amino acid input
+rule vsearch_usearch_global:
+	input:
+		"gene_calling/resolved.fna",
+	output:
+		hits="annotation/vsearch.usearch_global.txt",
+		tax="annotation/vsearch.usearch_global.txt.blastdbcmd.txt",
+	params:
+		vsearch="/home/li.gua/opt/vsearch/2.17.0-2021-03-29/bin/vsearch",
+		blastdbcmd="/home/li.gua/opt/ncbi/blast-2.11.0+-2020-11-03/bin/blastdbcmd",
+		vsearch_db="/home/li.gua/scratch/DATABASE/BLASTDB/FASTA/swissprot.fasta.udb",
+		blastdbcmd_db="/home/li.gua/scratch/DATABASE/BLASTDB/swissprot"
+	shell:
+		"""
+		mkdir -p annotation
+		# find hits in database
+		{params.vsearch} \\
+			--db {params.vsearch_db} \\
+			--usearch_global {input} --maxhits 50 --id 0.9 \\
+			--userfields query+target+evalue+raw+bits+alnlen+mism+id \\
+			--userout {output.hits} --threads $SLURM_CPUS_PER_TASK
+		# search the lineage/taxid
+		# NOTE: typically, no need to modify this section
+		cut -f2 {output.hits} | uniq | sort | uniq > {output.tax}.tmp
+		{params.blastdbcmd} \\
+			-db {params.blastdbcmd_db} \\
+			-outfmt "%a	%g	%i	%t	%T	%S" -entry_batch {output.tax}.tmp \\
+			-out {output.tax} \\
+		|| true # this will force it return 0
+		# otherwise snakemake will FFFFFFUUUUUUFUCKING delete all outputs
+		rm -f {output.tax}.tmp
+		"""
+
+rule diamond_blastp:
+	input:
+		"gene_calling/resolved.faa",
+	output:
+		hits="annotation/diamond.blastp.txt",
+		tax="annotation/diamond.blastp.txt.blastdbcmd.txt",
+	params:
+		diamond="/home/li.gua/opt/diamond/diamond-2.0.9",
+		blastdbcmd="/home/li.gua/opt/ncbi/blast-2.11.0+-2020-11-03/bin/blastdbcmd",
+		diamond_db="/home/li.gua/scratch/DATABASE/BLASTDB/nr",
+		blastdbcmd_db="/home/li.gua/scratch/DATABASE/BLASTDB/nr",
+	shell:
+		"""
+		mkdir -p annotation
+		# find hits in database
+		{params.diamond} blastp \\
+			--threads $SLURM_CPUS_PER_TASK -k 50 -e 0.1 -b 8 -c 1 \\
+			--db {params.diamond_db} -q {input} --out {output.hits} \\
+			--outfmt 6 qseqid sseqid evalue score bitscore length mismatch pident
+		# search the lineage/taxid
+		# NOTE: typically, no need to modify this section
+		cut -f2 {output.hits} | uniq | sort | uniq > {output.tax}.tmp
+		{params.blastdbcmd} \\
+			-db {params.blastdbcmd_db} \\
+			-outfmt "%a	%g	%i	%t	%T	%S" -entry_batch {output.tax}.tmp \\
+			-out {output.tax} \\
+		|| true # this will force it return 0
+		rm -f {output.tax}.tmp
+		"""
+
+# this rule 'selects' the set of blastp/blastdbcmd results used later
+rule link_blastp_results:
+	input:
+		hits="annotation/diamond.blastp.txt",
+		tax="annotation/diamond.blastp.txt.blastdbcmd.txt",
+	output:
+		hits="annotation/hits.txt",
+		tax="annotation/tax.txt",
+	shell:
+		"""
+		ln -sfT $(basename {input.hits}) {output.hits}
+		ln -sfT $(basename {input.tax}) {output.tax}
+		"""
+
+# after alignment, we can now parse the best hits out for phylogeny assignment
+rule prepare_lineage_annotation:
+	input:
+		hits="annotation/hits.txt",
+		tax="annotation/tax.txt",
+	output:
+		best_hits="annotation/hits.txt.best_hit.txt",
+		seq_to_contig="annotation/hits.txt.best_hit.txt.seq_to_contig.txt",
+		seq_to_accs="annotation/hits.txt.best_hit.txt.seq_to_accs.txt",
+		accs_to_taxid="annotation/hits.txt.accs_to_taxid.txt",
+	shell:
+		"""
+		# best blastp hit
+		./script/select_blastp_best_hit.py {input.hits} > {output.best_hits}
+		# seq id to contig
+		cut -f 1 {output.best_hits} | sed -r 's/^(c_[^_]+)(_.+)$/\\1\\2\\t\\1/' > {output.seq_to_contig}
+		# seq id to accession
+		cut -f 1,2 {output.best_hits} | sed -r 's/\\.[0-9]+//' > {output.seq_to_accs}
+		# accession to taxonomy id
+		cut -f 1,5 {input.tax} | sed -r 's/\\.[0-9]+//' > {output.accs_to_taxid}
+		"""
+
+rule contig_annotation:
+	input:
+		seq_to_contig="annotation/hits.txt.best_hit.txt.seq_to_contig.txt",
+		seq_to_accs="annotation/hits.txt.best_hit.txt.seq_to_accs.txt",
+		accs_to_taxid="annotation/hits.txt.accs_to_taxid.txt",
+		nodes_dmp="/home/li.gua/scratch/DATABASE/NCBI_TAXDB/2021-04-15/nodes.dmp",
+		names_dmp="/home/li.gua/scratch/DATABASE/NCBI_TAXDB/2021-04-15/names.dmp",
+	output:
+		tax_path="annotation/hits.txt.best_hit.txt.tax_path.txt",
+		lca="annotation/hits.txt.best_hit.txt.tax_path.txt.lca.txt",
+	shell:
+		"""
+		./script/contig_annotation.py \\
+			--seq-to-contig {input.seq_to_contig} \\
+			--seq-to-accs {input.seq_to_accs} \\
+			--accs-to-taxid {input.accs_to_taxid} \\
+			--nodes-dump {input.nodes_dmp} \\
+			--names-dump {input.names_dmp} \\
+			--output-tax-path {output.tax_path} \\
+			--output-lca {output.lca}
+		"""
+
+
+################################################################################
+# EXPERIMENTAL! try extract reads for 16S assembly
+################################################################################
+# to extract reads, map to midas 3.7
+rule rrna_16s_extract_reads:
+	input:
+		r1="trimmomatic/R1.fastq",
+		r2="trimmomatic/R2.fastq",
+	output:
+		sam="rrna_16s/reads_to_midas.sam",
+		r1="rrna_16s/R1.fastq",
+		r2="rrna_16s/R2.fastq",
+	params:
+		bowtie2="/home/li.gua/opt/bowtie/2-2.4.2-2020-10-05/bowtie2",
+		bt2_idx="../script/data/MiDAS.3.7.qiime.fa.bt2_idx",
+	shell:
+		"""
+		mkdir -p $(dirname {output})
+		{params.bowtie2} -q -p $SLURM_CPUS_PER_TASK \\
+			-x {params.bt2_idx} --very-sensitive-local -I 0 -X 1000 \\
+			-1 {input.r1} -2 {input.r2} -S {output.sam} \\
+			--al-conc rrna_16s/mapped
+		mv rrna_16s/mapped.1 {output.r1}
+		mv rrna_16s/mapped.2 {output.r2}
+		"""
