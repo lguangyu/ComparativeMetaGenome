@@ -1,6 +1,5 @@
 {
 	"__default__": {
-		"account": "li.gua",
 		"partition": "short",
 		"nodes": 1,
 		"cores": 1,
